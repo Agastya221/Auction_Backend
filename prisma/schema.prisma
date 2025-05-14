@@ -22,6 +22,8 @@ model User {
   topbids  Auction[] @relation("TopBids")
 
   @@index([username])
+  @@index([balances])
+  
 }
 
 model Auction {
