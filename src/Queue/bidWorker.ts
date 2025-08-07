@@ -1,9 +1,9 @@
 import { Worker } from "bullmq";
 import { bullMQConnection} from "./connection"
 import prisma from "../utils/Prisma";
-import { BidType } from "../types/auction.types";
+import { BidType } from "../types";
 
-new Worker("bid-queue",
+new Worker("save-bid",
     async job => {
         const { bid } = job.data as { bid: BidType };
         // Process the bid here 
@@ -17,6 +17,7 @@ new Worker("bid-queue",
                 amount: bid.amount,
             }
         })
+        
     },
     {
         connection: bullMQConnection

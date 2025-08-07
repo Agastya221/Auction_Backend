@@ -1,9 +1,7 @@
 import { Decimal } from '@prisma/client/runtime/library';
-import { AuctionType, BidType, UserType } from '../types/auction.types';
+import { AuctionType, BidType, UserType } from '../types';
 import prisma from '../utils/Prisma';
 import { bidQueue } from '../Queue/bidQueue';
-// import { bidQueue } from './queues/bidQueue';
-
 
 type InMemoryAuction = {
     Auction: AuctionType;
@@ -13,7 +11,7 @@ type InMemoryAuction = {
 
 
 
-class AuctionEngine {
+export class AuctionEngine {
     private static instance: AuctionEngine
     private auctions: Map<string, InMemoryAuction> = new Map()
     private userCache: Map<string, { balances: Decimal, username: string }> = new Map()
@@ -65,28 +63,27 @@ class AuctionEngine {
 
         for (const Auction of liveAuctions) {
             const timeleft = new Date(Auction.endTime).getTime() - Date.now()
-            const timeout = setTimeout(() => {
-                this.endAuction(Auction.id), timeleft
-            })
+            const timeout = setTimeout(() => this.endAuction(Auction.id), timeleft)
+
             this.auctions.set(Auction.id, {
                 Auction, bids: Auction.bids, timeout
             })
         }
         const users = await prisma.user.findMany({
-            select:{
+            select: {
                 id: true,
                 username: true,
                 balances: true
             }
         })
-        for (const user of users){
+        for (const user of users) {
             this.userCache.set(user.id, {
                 balances: user.balances,
                 username: user.username
             })
         }
     }
-    public async creatAuction(auctionData: Omit<AuctionType, "id">) {
+    public async createAuction(auctionData: Omit<AuctionType, "id">) {
         try {
             const newAuction = await prisma.auction.create({
                 data: {
@@ -130,9 +127,9 @@ class AuctionEngine {
 
         const newBid = {
             id: crypto.randomUUID(),
-            auctionId: auctionId,
-            userId: userId,
-            amount: amount,
+            auctionId,
+            userId,
+            amount,
             createdAt: new Date()
         }
 
@@ -144,30 +141,44 @@ class AuctionEngine {
             username: user.username
         }
 
-        bidQueue.add("save-bid",{
+        /* ► Soft‑close (optional 5 min extension) */
+        const remainingMs = new Date(auction.Auction.endTime).getTime() - Date.now();
+        const SOFT_THRESHOLD = 5 * 60 * 1000; // 5 minutes in milliseconds
+        if (remainingMs <= SOFT_THRESHOLD) {
+            auction.Auction.endTime = new Date(Date.now() + SOFT_THRESHOLD);
+            clearTimeout(auction.timeout);
+            auction.timeout = setTimeout(() => this.endAuction(auctionId), SOFT_THRESHOLD);
+        }
+
+        bidQueue.add("save-bid", {
             bid: newBid
         })
-
-
     }
-
-
-
-
-
-
 
     public async endAuction(auctionId: string) {
-        this.auctions.delete(auctionId)
-        await prisma.auction.update({
-            where: {
-                id: auctionId
-            },
-            data: {
-                status: "ENDED"
-            }
-        })
+        const mem = this.auctions.get(auctionId);
+        if (!mem) return;                                // already gone
+
+        clearTimeout(mem.timeout);                       // tidy up
+        this.auctions.delete(auctionId);                 // remove from RAM
+
+        // Ensure final topBid & topBidder are stored
+        await prisma.$transaction([
+            prisma.auction.update({
+                where: { id: auctionId },
+                data: {
+                    status: 'ENDED',
+                    topBid: mem.Auction.topBid,
+                    topBidderId: mem.Auction.topBidderId,
+                }
+            }),
+            // Optionally mark losers as refunded / unlock balances here
+        ]);
+
+        // Broadcast to clients (if you have a socket layer)
+        // socket.emit('auction-ended', { auctionId, winner: mem.Auction.topBidderId, topBid: mem.Auction.topBid });
     }
+
 
 
 
