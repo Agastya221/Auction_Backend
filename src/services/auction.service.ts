@@ -1,3 +1,7 @@
+// Current issue: You have duplicate createAuction methods
+// Remove the one in AuctionEngine and keep only in AuctionService
+
+// Improved AuctionService:
 import { Decimal } from '@prisma/client/runtime/library';
 import prisma from '../utils/Prisma';
 import { AuctionEngine } from '../Engine/auctionEngine';
@@ -6,13 +10,18 @@ import { AuctionType, BidType } from '../types';
 class AuctionService {
   private engine = AuctionEngine.getInstance();
 
-  /*───────────────────────────────────────────────────────────
-   *  CREATE  AUCTION  (called by controller)
-   *───────────────────────────────────────────────────────────*/
   async createAuction(
     data: Omit<AuctionType, 'id' | 'bids'>
   ): Promise<AuctionType> {
-    // 1️⃣  Persist to DB ‑ the auction must be durable
+    // Add validation
+    if (new Date(data.startTime) >= new Date(data.endTime)) {
+      throw new Error('End time must be after start time');
+    }
+    
+    if (Number(data.startingBid) <= 0) {
+      throw new Error('Starting bid must be positive');
+    }
+
     const dbAuction = await prisma.auction.create({
       data: {
         title: data.title,
@@ -31,15 +40,11 @@ class AuctionService {
       }
     });
 
-    // 2️⃣  Register in memory so bids can start instantly
-    this.engine.registerAuction(dbAuction as any);   // helper in engine
-
+    // Register in memory
+    this.engine.registerAuction(dbAuction as AuctionType);
     return dbAuction as AuctionType;
   }
 
-  /*───────────────────────────────────────────────────────────
-   *  PLACE  BID  (delegated to engine)
-   *───────────────────────────────────────────────────────────*/
   async placeBid(
     auctionId: string,
     amount: Decimal,
@@ -48,31 +53,40 @@ class AuctionService {
     return this.engine.placeBid(auctionId, amount, userId);
   }
 
-  /*───────────────────────────────────────────────────────────
-   *  READ HELPERS  (for controllers / UI)
-   *───────────────────────────────────────────────────────────*/
-  /** Get a single live auction from memory (fallback to DB) */
-  async getAuction(auctionId: string) {
+  async getAuction(auctionId: string): Promise<AuctionType | null> {
     const mem = this.engine.getAuction(auctionId);
     if (mem) return mem.Auction;
 
-    // Fallback (rare) – e.g., auction already ended or not yet cached
     return prisma.auction.findUnique({
       where: { id: auctionId },
       include: {
         topBidder: { select: { id: true, username: true } },
-        bids: { orderBy: { createdAt: 'asc' } }
+        bids: { 
+          orderBy: { createdAt: 'desc' },
+          take: 50 // Limit for performance
+        }
       }
-    });
+    }) as Promise<AuctionType | null>;
   }
 
-  /** Return lightweight list of all live auctions (from memory) */
   listLiveAuctions() {
     return this.engine.getAllLiveAuctions();
   }
+
+  async getUserBids(userId: string, auctionId?: string) {
+    return prisma.bid.findMany({
+      where: { 
+        userId,
+        ...(auctionId && { auctionId })
+      },
+      include: {
+        auction: {
+          select: { title: true, status: true }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+  }
 }
 
-/*------------------------------------------------------------
- * Export a singleton so controllers can import directly
- *-----------------------------------------------------------*/
 export default new AuctionService();

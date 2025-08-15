@@ -26,7 +26,7 @@ export type AuctionType = {
   status: 'Live' | 'ENDED' | 'CANCELLED';
   startTime: Date;
   endTime: Date;
-  startingBid: string;
+  startingBid: Decimal;
   creatorId:string;
   topBid: Decimal;
   topBidderId: string | null;

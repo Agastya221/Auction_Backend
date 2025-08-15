@@ -33,7 +33,7 @@ model Auction {
   status            AuctionStatus @default(Live)
   startTime         DateTime
   endTime           DateTime
-  startingBid       String
+  startingBid       Decimal       @default(0)
   topBid            Decimal       @default(0)
   topBidderId       String?
   creatorId         String
